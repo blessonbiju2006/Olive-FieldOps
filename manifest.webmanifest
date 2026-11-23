@@ -1,6 +1,6 @@
 {
-  "name": "Olive App ",
-  "short_name": "Olive App",
+  "name": "Olive FieldOps", ",
+  "short_name": "Olive FieldOps",
   "description": "Single-operator executive dashboard and payroll manager for independent painting contractors.",
   "start_url": "./index.html",
   "display": "standalone",
