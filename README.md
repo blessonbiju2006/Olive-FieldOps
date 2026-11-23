@@ -14,8 +14,8 @@
 
   <p>
     <a href="https://blessonbiju2006.github.io/Olive-FieldOps/"><strong>Live Application</strong></a> •
+    <a href="#-in-app-feature-showcase"><strong>App Screenshots</strong></a> •
     <a href="#-system-architecture"><strong>Architecture</strong></a> •
-    <a href="#-dual-storage-engine"><strong>Storage Engine</strong></a> •
     <a href="#-local-setup--deployment"><strong>Setup Guide</strong></a>
   </p>
 
@@ -32,6 +32,24 @@
 **Olive FieldOps (PaintPro Command Hub)** is a mobile-first field operations system built for painting contractors, site supervisors, and turnkey interior execution teams. Designed to operate reliably inside low-connectivity construction sites, it unifies attendance tracking, wage rate ledgers, cash advance floats, drying timers, and voice field notes into an instant-loading web application.
 
 By eliminating heavy frontend frameworks and server runtimes, the application achieves **0 KB framework overhead**, sub-second cold boot speeds, and **₹0/month infrastructure costs**.
+
+---
+
+## In-App Feature Showcase
+
+<div align="center">
+
+| Command Dashboard & Queue | Workforce & Attendance | Payroll & Cash Floats |
+| :---: | :---: | :---: |
+| <img src="assets/dashboard-preview.png" alt="Command Dashboard" width="240" /> | <img src="assets/workers-ledger.png" alt="Workforce Attendance" width="240" /> | <img src="assets/payroll-floats.png" alt="Payroll and Cash Floats" width="240" /> |
+| *Live attendance counters, weekly payout summary, and ranked priority alerts.* | *One-tap daily attendance tracking with historical wage rate history.* | *Automated weekly balance calculation, advance floats, and settlement locks.* |
+
+| Job Site Stages & Timers | Offline Voice Memos | Client Appointments |
+| :---: | :---: | :---: |
+| <img src="assets/site-stages.png" alt="Site Progress and Timers" width="240" /> | <img src="assets/voice-memos.png" alt="Offline Voice Memos" width="240" /> | <img src="assets/appointments.png" alt="Client Appointments" width="240" /> |
+| *Room-by-room stage checklists paired with background curing timers.* | *Web Audio API field notes saved locally in IndexedDB.* | *Site visit schedules with direct Call and WhatsApp triggers.* |
+
+</div>
 
 ---
 
@@ -104,9 +122,12 @@ To maintain 100% offline reliability on job sites while keeping cloud database o
 Olive-FieldOps/
 ├── assets/
 │   ├── olive-app-hero.png       # Official PaintPro Command Hub promotional banner
-│   ├── dashboard-preview.png    # Mobile dashboard interface capture
-│   ├── workers-ledger.png       # Workforce attendance & cash float view
-│   └── site-stages.png          # Room-by-room painting progress checklist
+│   ├── dashboard-preview.png    # Command Dashboard & Priority Queue screen
+│   ├── workers-ledger.png       # Workforce & Attendance tracking screen
+│   ├── payroll-floats.png       # Payroll & Cash Float accounting screen
+│   ├── site-stages.png          # Room-by-room painting progress & timers screen
+│   ├── voice-memos.png          # Offline Web Audio voice memos screen
+│   └── appointments.png         # Client appointments & contact actions screen
 ├── css/                         # Modular styling rules and Dark/Light theme variables
 ├── icons/                       # PWA launcher icons and platform splash assets
 ├── js/
@@ -164,13 +185,6 @@ When deploying code or UI updates to installed mobile devices, increment the cac
 - **Production Hardening:** Restrict API key HTTP referrers to `https://blessonbiju2006.github.io/*` in Google Cloud Console and enforce strict Firestore Security Rules before handling live payroll records.
 
 </details>
-
----
-
-## Architecture Economics
-
-- **Infrastructure Operating Cost:** **₹0 / month** — Powered by GitHub Pages static hosting and Google Firebase Spark free tier (50,000 daily reads / 20,000 daily writes) via local binary audio isolation.
-- **Commercial Package Valuation:** **₹45,000 – ₹60,000** standard custom deployment value with an **~₹8,000 / year** maintenance retainer benchmark.
 
 ---
 
