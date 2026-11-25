@@ -1,4 +1,4 @@
-// PaintPro Command Hub - app logic (PWA + Dynamic Editable Service Checklists)
+// PaintPro Command Hub - app logic (PWA + Dynamic Editable Service Checklists + Notification Center)
 
 // ===== 0. FIREBASE REAL-TIME CLOUD SYNC =====
 
@@ -29,6 +29,7 @@ async function syncToCloud() {
       att: S.att,
       floats: S.floats,
       timers: S.timers,
+      timerLogs: S.timerLogs || [],
       appts: S.appts,
       sites: S.sites,
       settled: S.settled,
@@ -48,6 +49,7 @@ function listenToCloudSync() {
         
         // Merge cloud state locally
         S = { ...S, ...cloudData };
+        migrate();
         
         // Update local storage & IndexedDB
         try { localStorage.setItem("pp", JSON.stringify(S)); } catch(e){}
@@ -130,7 +132,7 @@ let S=null;
 
 const defaultState = {
   workers:[{id:1,name:"Ravi",rate:800,siteId:null},{id:2,name:"Suresh",rate:800,siteId:null}],
-  att:{},floats:[],timers:[],appts:[],sites:[],theme:"dark",settled:{}
+  att:{},floats:[],timers:[],timerLogs:[],appts:[],sites:[],theme:"dark",settled:{}
 };
 
 const DEFAULT_SERVICE_STAGES = [
@@ -142,6 +144,9 @@ const DEFAULT_SERVICE_STAGES = [
 const migrate=()=>{
   S.settled=S.settled||{};
   S.sites=S.sites||[];
+  S.timers=S.timers||[];
+  S.timerLogs=S.timerLogs||[];
+  S.appts=S.appts||[];
   S.workers.forEach(w=>{
     if(!w.rates)w.rates=[{from:"0000-01-01",rate:w.rate}];
     if(w.siteId===undefined) w.siteId=null;
@@ -160,7 +165,7 @@ const save = async () => {
   syncToCloud(); // Triggers real-time cloud sync across devices
 };
 
-let view="dash",off=0,mode="week",sh=null,bk=null,rk=null,ew=null,es=null,ea=null,armed=false,rtxt="",memos=[],rec=null,actx,an,raf,stream,chunks=[],selectedSiteFilter="all";
+let view="dash",off=0,mode="week",sh=null,notifOpen=false,bk=null,rk=null,ew=null,es=null,ea=null,armed=false,rtxt="",memos=[],rec=null,actx,an,raf,stream,chunks=[],selectedSiteFilter="all";
 
 if (navigator.storage && navigator.storage.persist) {
   navigator.storage.persist();
@@ -190,22 +195,158 @@ const cd=end=>{const s=Math.max(0,Math.round((end-Date.now())/1000));return Math
 
 function toast(m){const t=$("#toast");t.textContent=m;t.style.display="block";setTimeout(()=>t.style.display="none",2200)}
 
-function updateNotifyBadge() {
-  const nb = document.querySelector("[data-a=notify]");
-  if (!nb) return;
-  const activeTimers = S.timers.filter(t => !t.fired).length;
-  if (!("Notification" in window)) {
-    nb.textContent = "🔔 Unsupported";
-  } else if (Notification.permission === "granted") {
-    nb.textContent = activeTimers > 0 ? `🔔 Alerts On (${activeTimers})` : "🔔 Alerts On";
-  } else if (Notification.permission === "denied") {
-    nb.textContent = "🔕 Muted";
-  } else {
-    nb.textContent = "🔔 Notify";
+function archiveTimerToLog(tm, status) {
+  S.timerLogs = S.timerLogs || [];
+  // Avoid duplicate log entries for the same timer id
+  if (!S.timerLogs.some(x => String(x.id) === String(tm.id))) {
+    S.timerLogs.unshift({
+      id: tm.id,
+      label: tm.label,
+      status: status, // "Completed" or "Closed"
+      at: new Date().toISOString()
+    });
+    S.timerLogs = S.timerLogs.slice(0, 10);
   }
 }
 
-// ===== 4. VIEWS =====
+function getNotifCount() {
+  const t = today();
+  const runningTimers = S.timers.length;
+  const closedTimers = (S.timerLogs || []).length;
+  const todaysAppts = S.appts.filter(a => a.date === t).length;
+  const unreadMemos = memos.filter(m => !m.heard).length;
+  return runningTimers + closedTimers + todaysAppts + unreadMemos;
+}
+
+function updateNotifyBadge() {
+  const nb = document.querySelector("[data-a=notify]");
+  if (!nb) return;
+  const count = getNotifCount();
+  nb.innerHTML = count > 0 ? `🔔 Alerts <span class="nbadge">${count}</span>` : `🔔 Alerts`;
+  nb.classList.toggle("am", notifOpen);
+}
+
+// ===== 4. NOTIFICATION BAR / DRAWER =====
+
+function notifHTML() {
+  const t = today();
+  const activeTimers = S.timers.filter(x => !x.fired);
+  const expiredTimers = S.timers.filter(x => x.fired);
+  const closedLogs = S.timerLogs || [];
+  const unreadMemos = memos.filter(m => !m.heard);
+  const todaysAppts = S.appts.filter(a => a.date === t);
+  const upcomingAppts = S.appts.filter(a => a.date > t).sort((a,b) => a.date < b.date ? -1 : 1).slice(0, 4);
+  const needsPushPerm = ("Notification" in window) && Notification.permission === "default";
+
+  return `<div class="back" data-a="closenotif"></div>
+  <div class="notif-drawer">
+    <div class="row" style="margin-bottom:12px;">
+      <strong style="font-size:16px;">🔔 Activity & Alerts</strong>
+      <span class="sp"></span>
+      <button class="x" data-a="closenotif">✕</button>
+    </div>
+
+    ${needsPushPerm ? `
+      <div class="card warn row" style="padding:10px 12px;">
+        <span style="font-size:13px;">Enable device push alerts for timers?</span>
+        <span class="sp"></span>
+        <button class="btn sm am" data-a="reqpush">Enable</button>
+      </div>
+    ` : ""}
+
+    <div class="notif-sec">
+      <div class="row" style="margin-bottom:6px;">
+        <span class="mu"><b>🎙 Unheard Voice Memos (${unreadMemos.length})</b></span>
+        <span class="sp"></span>
+        ${unreadMemos.length ? `<button class="btn sm" data-a="navnotif" data-v="voice">Open All</button>` : ""}
+      </div>
+      ${unreadMemos.length ? unreadMemos.map(m => `
+        <div class="notif-item warn">
+          <div>
+            <b>New Field Note</b>
+            <div class="mu">${new Date(m.at).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"})} · ${new Date(m.at).toLocaleDateString()}</div>
+          </div>
+          <button class="btn sm am" data-a="navnotif" data-v="voice">Listen</button>
+        </div>
+      `).join("") : `<p class="mu" style="margin:4px 0 10px;">No unheard voice memos.</p>`}
+    </div>
+
+    <div class="notif-sec">
+      <div class="row" style="margin-bottom:6px;">
+        <span class="mu"><b>⏱ Active & Expired Timers (${activeTimers.length + expiredTimers.length})</b></span>
+        <span class="sp"></span>
+        <button class="btn sm" data-a="navnotif" data-v="timers">+ Timer</button>
+      </div>
+      ${expiredTimers.map(tm => `
+        <div class="notif-item urgent">
+          <div>
+            <b>Done: ${esc(tm.label)}</b>
+            <div class="mu">Timer finished</div>
+          </div>
+          <button class="btn sm" data-a="delt" data-id="${tm.id}">Close</button>
+        </div>
+      `).join("")}
+      ${activeTimers.map(tm => `
+        <div class="notif-item">
+          <div>
+            <b>${esc(tm.label)}</b>
+            <div class="mu">Running · <span class="cd" style="font-size:14px;" data-end="${tm.end}">${cd(tm.end)}</span></div>
+          </div>
+          <button class="btn sm" data-a="delt" data-id="${tm.id}">Stop</button>
+        </div>
+      `).join("")}
+      ${(!activeTimers.length && !expiredTimers.length) ? `<p class="mu" style="margin:4px 0 10px;">No running timers.</p>` : ""}
+    </div>
+
+    <div class="notif-sec">
+      <div class="row" style="margin-bottom:6px;">
+        <span class="mu"><b>✅ Closed Timers (${closedLogs.length})</b></span>
+        <span class="sp"></span>
+        ${closedLogs.length ? `<button class="btn sm" data-a="clearlogs">Clear</button>` : ""}
+      </div>
+      ${closedLogs.length ? closedLogs.map(lg => `
+        <div class="notif-item">
+          <div>
+            <b>${esc(lg.label)}</b>
+            <div class="mu">${esc(lg.status)} · ${new Date(lg.at).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"})}</div>
+          </div>
+        </div>
+      `).join("") : `<p class="mu" style="margin:4px 0 10px;">No closed timer history.</p>`}
+    </div>
+
+    <div class="notif-sec" style="border-bottom:none; padding-bottom:0;">
+      <div class="row" style="margin-bottom:6px;">
+        <span class="mu"><b>📅 Appointments (${todaysAppts.length} Today · ${upcomingAppts.length} Upcoming)</b></span>
+        <span class="sp"></span>
+        <button class="btn sm" data-a="navnotif" data-v="appt">View All</button>
+      </div>
+      ${todaysAppts.map(a => `
+        <div class="notif-item urgent">
+          <div>
+            <b>TODAY: ${esc(a.title)}</b>
+            <div class="mu">${esc(a.type)} ${a.time ? `· 🕒 ${a.time}` : ""}</div>
+          </div>
+          <div class="row" style="margin:0;">
+            ${a.phone ? `<a class="btn sm" href="tel:${a.phone}">Call</a>` : ""}
+            ${a.phone ? `<a class="btn sm" href="https://wa.me/${a.phone.replace(/[^0-9]/g,'')}" target="_blank">WA</a>` : ""}
+          </div>
+        </div>
+      `).join("")}
+      ${upcomingAppts.map(a => `
+        <div class="notif-item">
+          <div>
+            <b>${esc(a.title)}</b>
+            <div class="mu">${a.date} ${a.time ? `· ${a.time}` : ""} · ${esc(a.type)}</div>
+          </div>
+          ${a.phone ? `<a class="btn sm" href="tel:${a.phone}">Call</a>` : ""}
+        </div>
+      `).join("")}
+      ${(!todaysAppts.length && !upcomingAppts.length) ? `<p class="mu" style="margin:4px 0;">No scheduled appointments.</p>` : ""}
+    </div>
+  </div>`;
+}
+
+// ===== 5. VIEWS =====
 
 const tgs=(w,d)=>{const L=isLocked(w,d);return ["P","H","A"].map(k=>`<button class="tg ${k}${S.att[w+"|"+d]==k?" on":""}"${L?" disabled":""} data-a="set" data-w="${w}" data-d="${d}" data-v="${k}">${LB[k]}</button>`).join("")};
 
@@ -449,7 +590,7 @@ function vVoice(){
 
 function vTimers(){return `<div class="row"><input id="tl" placeholder="Label (e.g. Coat 1 drying)"><input id="tmn" type="number" inputmode="numeric" placeholder="Minutes"><button class="btn am" data-a="addt">Start</button></div>${qt()}`+S.timers.map(t=>`<div class="card row"><span><b>${esc(t.label)}</b><br>${t.fired?`<span class="mu">Done</span>`:`<span class="cd" data-end="${t.end}">${cd(t.end)}</span>`}</span><span class="sp"></span><button class="x" data-a="delt" data-id="${t.id}">✕</button></div>`).join("")}
 
-// ===== 5. RENDER & EXPORT =====
+// ===== 6. RENDER & EXPORT =====
 
 function render(){
   const tb=document.querySelector("[data-a=theme]");
@@ -459,16 +600,16 @@ function render(){
   $("#nav").innerHTML=NAV.map(([k,l,i])=>`<button class="nv${view==k?" on":""}" data-a="nav" data-v="${k}"><span>${i}</span>${l}</button>`).join("");
   $("#main").innerHTML={dash:vDash,workers:vWorkers,site:vSite,appt:vAppt,voice:vVoice,timers:vTimers}[view]();
   if(sh&&!S.workers.find(x=>x.id==sh.w))sh=null;
-  $("#sheet").innerHTML=sh?sheetHTML():"";
+  $("#sheet").innerHTML=sh?sheetHTML():(notifOpen?notifHTML():"");
   updateNotifyBadge();
 }
 
 function summary(){const os=mode=="month"?[-3,-2,-1,0]:[off];let t="PaintPro payroll summary\n";os.forEach(o=>{const d=weekDays(o);t+="\nWeek "+d[0]+" to "+d[6]+"\n";S.workers.forEach(w=>{const c=calc(w,d);if(w.archived&&!c.e&&!c.f&&c.paid===undefined)return;t+=w.name+": earned "+money(c.e)+", float "+money(c.f)+", net "+money(c.n)+(c.paid!==undefined?", PAID "+money(c.paid)+(c.n-c.paid?" (balance "+money(c.n-c.paid)+")":"")+" [settled]":"")+"\n"})});return t}
 
-// ===== 6. ACTIONS =====
+// ===== 7. ACTIONS =====
 
 const addFloat=a=>{if(a>0&&!isLocked(sh.w,sh.d)){S.floats.push({id:newId(),w:sh.w,date:sh.d,amt:a,ts:new Date().toISOString()});save();render()}};
-const addTimer=(label,min)=>{if(min>0){S.timers.unshift({id:Date.now(),label:label||"Timer "+min+" min",end:Date.now()+min*60000,fired:false});save();toast("Timer started: "+min+" min");if(view=="timers")render()}};
+const addTimer=(label,min)=>{if(min>0){S.timers.unshift({id:Date.now(),label:label||"Timer "+min+" min",end:Date.now()+min*60000,fired:false});save();toast("Timer started: "+min+" min");render()}};
 
 function editPanel(w){const hist=[...w.rates].sort((a,b)=>a.from<b.from?-1:1).map(x=>(x.from=="0000-01-01"?"Start":"From "+x.from)+": "+money(x.rate)).join(" · ");
  return `<div class="card" style="margin-bottom:10px"><div class="row"><input id="en" value="${esc(w.name)}" placeholder="Name"><input id="er" type="number" inputmode="numeric" placeholder="New rate ₹/day"><input id="ed" type="date" value="${today()}"></div>
@@ -482,7 +623,7 @@ function settleRow(w,days,c){const k=w.id+"|"+days[0],z=S.settled[k];
  if(z){const b=z.n-z.paid;return `<div class="row" style="margin-top:10px"><span class="mu">🔒 Settled ${new Date(z.at).toLocaleDateString()} · Paid <b>${money(z.paid)}</b>${b?` · ${b>0?"Still owed":"Overpaid"} <b class="${b>0?"":"neg"}">${money(Math.abs(b))}</b>`:""}</span><span class="sp"></span><button class="btn sm" data-a="reopen" data-k="${k}">${rk==k?"Tap again to reopen":"Reopen"}</button></div>`}
  return `<div class="row" style="margin-top:10px"><input id="pd${w.id}" type="number" inputmode="numeric" value="${Math.max(0,Math.round(c.n))}" aria-label="Amount paid"><button class="btn am" data-a="settle" data-w="${w.id}">Settle week</button></div>`}
 
-const backupText=()=>JSON.stringify({app:"paintpro",v:1,at:new Date().toISOString(),data:{workers:S.workers,att:S.att,floats:S.floats,timers:S.timers,appts:S.appts,sites:S.sites,settled:S.settled,theme:S.theme}});
+const backupText=()=>JSON.stringify({app:"paintpro",v:1,at:new Date().toISOString(),data:{workers:S.workers,att:S.att,floats:S.floats,timers:S.timers,timerLogs:S.timerLogs,appts:S.appts,sites:S.sites,settled:S.settled,theme:S.theme}});
 const markBackup=()=>{S.lastBackup=new Date().toISOString();save();render()};
 const backupAge=()=>S.lastBackup?Math.floor((Date.now()-new Date(S.lastBackup))/864e5):null;
 const hasData=()=>S.floats.length>0||Object.keys(S.att).length>0;
@@ -490,7 +631,7 @@ const hasData=()=>S.floats.length>0||Object.keys(S.att).length>0;
 function restoreFrom(text){let o;try{o=JSON.parse(text.trim())}catch(e){return "That text is not a valid backup"}
  const d=o&&o.app=="paintpro"?o.data:null;
  if(!d||!Array.isArray(d.workers)||!Array.isArray(d.floats)||!d.att||typeof d.att!="object")return "This is not a PaintPro backup";
- S={...S,...d,timers:d.timers||[],appts:d.appts||[],sites:d.sites||[],settled:d.settled||{}};migrate();save();return ""}
+ S={...S,...d,timers:d.timers||[],timerLogs:d.timerLogs||[],appts:d.appts||[],sites:d.sites||[],settled:d.settled||{}};migrate();save();return ""}
 
 function backupCard(){const a=backupAge(),st=a===null?"Never backed up":a==0?"Backed up today":"Last backup: "+a+" day(s) ago";
  let h=`<div class="card"><div class="row"><b>Backup</b><span class="mu${a===null||a>6?" neg":""}">${st}</span></div>
@@ -499,7 +640,7 @@ function backupCard(){const a=backupAge(),st=a===null?"Never backed up":a==0?"Ba
  if(bk=="show")h+=`<textarea readonly onfocus="this.select()">${esc(backupText())}</textarea><p class="mu">Copy was blocked here. Tap the box, select all, copy it yourself, then tap the button.</p><div class="row"><button class="btn am" data-a="bdone">I copied it</button></div>`;
  return h+`<p class="mu">Voice memos are stored separately in IndexedDB.</p></div>`}
 
-// ===== 7. VOICE MEMO RECORDER =====
+// ===== 8. VOICE MEMO RECORDER =====
 
 async function startRec(){
   try{stream=await navigator.mediaDevices.getUserMedia({audio:true})}catch(e){toast("Microphone blocked");return}
@@ -517,17 +658,33 @@ async function startRec(){
 
 function draw(){const c=$("#wave");if(!c||!an||!rec)return;const x=c.getContext("2d"),d=new Uint8Array(an.frequencyBinCount);an.getByteFrequencyData(d);c.width=c.clientWidth;c.height=120;const bw=c.width/d.length;d.forEach((v,i)=>{const h=Math.max(3,v/255*110);x.fillStyle="#f59e0b";x.fillRect(i*bw+1,60-h/2,bw-2,h)});raf=requestAnimationFrame(draw)}
 
-// ===== 8. EVENT HANDLERS =====
+// ===== 9. EVENT HANDLERS =====
 
 document.addEventListener("click",async e=>{
   const b=e.target.closest("[data-a]");if(!b||b.tagName=="INPUT"||b.tagName=="AUDIO"||b.tagName=="SELECT")return;
   const a=b.dataset.a,D=b.dataset,v=D.v;
 
-  if(a=="nav"){view=v;render()}
+  if(a=="nav"){view=v;notifOpen=false;render()}
+  else if(a=="navnotif"){view=v;notifOpen=false;render()}
   else if(a=="theme"){S.theme=S.theme=="dark"?"light":"dark";save();render()}
   else if(a=="notify"){
+    sh=null;
+    notifOpen=!notifOpen;
+    render();
+  }
+  else if(a=="closenotif"){
+    notifOpen=false;
+    render();
+  }
+  else if(a=="reqpush"){
     if(!("Notification" in window)) toast("Not supported here");
-    else Notification.requestPermission().then(p => { toast("Notifications: " + p); updateNotifyBadge(); });
+    else Notification.requestPermission().then(p => { toast("Notifications: " + p); render(); });
+  }
+  else if(a=="clearlogs"){
+    S.timerLogs = [];
+    save();
+    toast("Closed timer logs cleared");
+    render();
   }
   else if(a=="fltsite"){ selectedSiteFilter=v; render(); }
   else if(a=="all"){
@@ -557,7 +714,7 @@ document.addEventListener("click",async e=>{
     }
   }
   else if(a=="set"){if(isLocked(D.w,D.d)){toast("Week is settled. Reopen it to edit");return}const k=D.w+"|"+D.d;if(S.att[k]==v)delete S.att[k];else S.att[k]=v;save();render()}
-  else if(a=="sheet"){sh={w:D.w,d:D.d};render()}
+  else if(a=="sheet"){notifOpen=false;sh={w:D.w,d:D.d};render()}
   else if(a=="close"){sh=null;render()}
   else if(a=="fl")addFloat(+v);
   else if(a=="flc")addFloat(+$("#fa").value);
@@ -688,7 +845,14 @@ document.addEventListener("click",async e=>{
   }
   else if(a=="tm")addTimer("",+v);
   else if(a=="addt")addTimer($("#tl").value.trim(),+$("#tmn").value);
-  else if(a=="delt"){S.timers=S.timers.filter(x=>x.id!=D.id);save();render()}
+  else if(a=="delt"){
+    const tm = S.timers.find(x=>String(x.id)===String(D.id));
+    if(tm){
+      archiveTimerToLog(tm, tm.fired ? "Completed" : "Closed");
+    }
+    S.timers=S.timers.filter(x=>String(x.id)!==String(D.id));
+    save();render();
+  }
   else if(a=="delmemo"){await idb.deleteMemo(D.id);memos=memos.filter(x=>x.id!=D.id);render()}
   else if(a=="bcopy"){const t=backupText(),fb=()=>{bk="show";render()};try{navigator.clipboard.writeText(t).then(()=>{toast("Backup copied");markBackup()}).catch(fb)}catch(x){fb()}}
   else if(a=="bfile"){const u=URL.createObjectURL(new Blob([backupText()],{type:"application/json"})),l=document.createElement("a");l.href=u;l.download="paintpro-backup-"+today()+".json";l.click();setTimeout(()=>URL.revokeObjectURL(u),1000);markBackup()}
@@ -716,12 +880,17 @@ document.addEventListener("change",e=>{
 
 document.addEventListener("play",e=>{const t=e.target;if(t.dataset&&t.dataset.a=="heard"){
   const memo = memos.find(m=>m.id==t.dataset.id);
-  if(memo){ memo.heard=true; idb.saveMemo(memo); }
+  if(memo){ memo.heard=true; idb.saveMemo(memo); updateNotifyBadge(); }
 }},true);
 
-document.addEventListener("keydown", e => { if (e.key === "Escape" && sh) { sh = null; render(); } });
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") {
+    if (sh) { sh = null; render(); }
+    if (notifOpen) { notifOpen = false; render(); }
+  }
+});
 
-// ===== 9. TIMER ALERTS & INITIALIZATION =====
+// ===== 10. TIMER ALERTS & INITIALIZATION =====
 
 function ring(t){
   toast("⏱ "+t.label+" is done");
