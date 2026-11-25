@@ -53,8 +53,9 @@ function listenToCloudSync() {
         try { localStorage.setItem("pp", JSON.stringify(S)); } catch(e){}
         if (db) idb.setKV("state", S);
 
-        // Re-render UI dynamically if not actively typing inside an input
-        if (document.activeElement && document.activeElement.tagName !== "INPUT") {
+        // Re-render UI dynamically if not actively typing inside an input or select
+        const activeTag = document.activeElement ? document.activeElement.tagName : "";
+        if (activeTag !== "INPUT" && activeTag !== "SELECT" && activeTag !== "TEXTAREA") {
           render();
         }
       }
@@ -159,9 +160,9 @@ const save = async () => {
   syncToCloud(); // Triggers real-time cloud sync across devices
 };
 
-let view="dash",off=0,mode="week",sh=null,bk=null,rk=null,ew=null,armed=false,rtxt="",memos=[],rec=null,actx,an,raf,stream,chunks=[],selectedSiteFilter="all";
+let view="dash",off=0,mode="week",sh=null,bk=null,rk=null,ew=null,es=null,ea=null,armed=false,rtxt="",memos=[],rec=null,actx,an,raf,stream,chunks=[],selectedSiteFilter="all";
 
-if (navigator.storage && navigator.storagepersist) {
+if (navigator.storage && navigator.storage.persist) {
   navigator.storage.persist();
 }
 
@@ -319,6 +320,18 @@ function sheetHTML(){const w=S.workers.find(x=>x.id==sh.w),d=sh.d,fl=S.floats.fi
  <p class="mu">Float this day: <b>${money(tot)}</b></p>${fl.map(x=>{const tm=new Date(x.ts).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});return `<div class="row mu" style="margin-bottom:6px"><span${x.rv?' style="text-decoration:line-through"':""}>${tm} · ${x.rev?"↩ Reversal ":""}${money(x.amt)}</span>${!x.rv&&!x.rev&&!isLocked(w.id,d)?`<button class="btn sm" data-a="rev" data-id="${x.id}">Reverse</button>`:""}</div>`}).join("")}
  </div>`}
 
+function siteEditPanel(s){
+  return `<div class="card" style="margin-bottom:10px; border-color:var(--am);">
+    <div class="row">
+      <input id="esn_${s.id}" value="${esc(s.name)}" placeholder="Site name">
+    </div>
+    <div class="row">
+      <button class="btn sm am" data-a="savesite" data-id="${s.id}">Save Site</button>
+      <button class="btn sm" data-a="cancelsite">Cancel</button>
+    </div>
+  </div>`;
+}
+
 function vSite(){
   const t = today();
   return `<div class="row"><input id="sn" placeholder="New site name"><button class="btn am" data-a="adds">+ Add Site</button></div>`+
@@ -334,8 +347,11 @@ function vSite(){
         <b>${esc(s.name)}</b>
         <span class="sp"></span>
         <b>${stagePct}% Complete</b>
+        <button class="x" data-a="editsite" data-id="${s.id}">✎ Edit</button>
         <button class="x" data-a="delsite" data-id="${s.id}">✕</button>
       </div>
+
+      ${String(es) === String(s.id) ? siteEditPanel(s) : ""}
 
       <div style="margin-bottom:6px;"><span class="mu">Service & Paint Stages Checklist (${completedStages}/${stages.length}):</span></div>
       
@@ -374,6 +390,30 @@ function vSite(){
   }).join("") + (S.sites.length?"":`<p class="mu">No job sites added yet.</p>`);
 }
 
+function apptEditPanel(a){
+  const types = ["Consultation", "Site Visit", "Final Walkthrough"];
+  return `<div class="card" style="margin-top:10px; border-color:var(--am);">
+    <div class="row">
+      <input id="eat_${a.id}" value="${esc(a.title)}" placeholder="Client name / purpose">
+      <input id="eap_${a.id}" value="${esc(a.phone || '')}" placeholder="Phone number">
+    </div>
+    <div class="row">
+      <input id="ead_${a.id}" type="date" value="${a.date || today()}">
+      <input id="eatm_${a.id}" type="time" value="${a.time || ''}">
+      <select id="eay_${a.id}">
+        ${types.map(tp => `<option${a.type === tp ? ' selected' : ''}>${tp}</option>`).join("")}
+      </select>
+    </div>
+    <div class="row">
+      <input id="eaaddr_${a.id}" value="${esc(a.addr || '')}" placeholder="Site address" style="width:100%;">
+    </div>
+    <div class="row">
+      <button class="btn sm am" data-a="saveappt" data-id="${a.id}">Save Changes</button>
+      <button class="btn sm" data-a="cancelappt">Cancel</button>
+    </div>
+  </div>`;
+}
+
 function vAppt(){
   return `<div class="card">
     <div class="row"><input id="at" placeholder="Client name / purpose"><input id="ap" placeholder="Phone number"></div>
@@ -385,12 +425,15 @@ function vAppt(){
       <b>${esc(a.title)}</b>
       <span class="sp"></span>
       <span class="mu">${a.type}</span>
+      <button class="x" data-a="editappt" data-id="${a.id}">✎ Edit</button>
       <button class="x" data-a="dela" data-id="${a.id}">✕</button>
     </div>
-    <p class="mu" style="margin:2px 0;">📅 ${a.date} ${a.time ? `· 🕒 ${a.time}` : ''}</p>
-    ${a.phone ? `<p class="mu" style="margin:2px 0;">📞 ${esc(a.phone)}</p>` : ''}
-    ${a.addr ? `<p class="mu" style="margin:2px 0;">📍 ${esc(a.addr)}</p>` : ''}
-    ${a.phone ? `<div class="row" style="margin-top:8px;"><a class="btn sm" href="tel:${a.phone}">📞 Call</a><a class="btn sm" href="https://wa.me/${a.phone.replace(/[^0-9]/g,'')}" target="_blank">💬 WhatsApp</a></div>` : ''}
+    ${String(ea) === String(a.id) ? apptEditPanel(a) : `
+      <p class="mu" style="margin:2px 0;">📅 ${a.date} ${a.time ? `· 🕒 ${a.time}` : ''}</p>
+      ${a.phone ? `<p class="mu" style="margin:2px 0;">📞 ${esc(a.phone)}</p>` : ''}
+      ${a.addr ? `<p class="mu" style="margin:2px 0;">📍 ${esc(a.addr)}</p>` : ''}
+      ${a.phone ? `<div class="row" style="margin-top:8px;"><a class="btn sm" href="tel:${a.phone}">📞 Call</a><a class="btn sm" href="https://wa.me/${a.phone.replace(/[^0-9]/g,'')}" target="_blank">💬 WhatsApp</a></div>` : ''}
+    `}
   </div>`).join("");
 }
 
@@ -533,9 +576,31 @@ document.addEventListener("click",async e=>{
     const n=$("#sn").value.trim();
     if(n){S.sites.push({id:Date.now(),name:n,stages:JSON.parse(JSON.stringify(DEFAULT_SERVICE_STAGES)),rooms:[]});save();render();}
   }
+  else if(a=="editsite"){
+    es = (String(es) === String(D.id)) ? null : D.id;
+    render();
+  }
+  else if(a=="cancelsite"){
+    es = null;
+    render();
+  }
+  else if(a=="savesite"){
+    const s = S.sites.find(x=>String(x.id)===String(D.id));
+    const inp = document.getElementById("esn_" + D.id);
+    const newName = inp ? inp.value.trim() : "";
+    if(!newName){ toast("Site name cannot be empty"); return; }
+    if(s){
+      s.name = newName;
+      es = null;
+      save();
+      toast("Site updated");
+      render();
+    }
+  }
   else if(a=="delsite"){
     S.sites=S.sites.filter(x=>String(x.id)!==String(D.id));
     S.workers.forEach(w=>{ if(String(w.siteId)===String(D.id)) w.siteId=null; });
+    if(String(es)===String(D.id)) es=null;
     save();render();
   }
   else if(a=="toggleStage"){
@@ -585,7 +650,42 @@ document.addEventListener("click",async e=>{
     const n=$("#at").value.trim(), p=$("#ap").value.trim(), d=$("#ad").value, tm=$("#atm").value, y=$("#ay").value, addr=$("#aaddr").value.trim();
     if(n){ S.appts.push({id:Date.now(),title:n,phone:p,date:d,time:tm,type:y,addr:addr}); save(); render(); }
   }
-  else if(a=="dela"){S.appts=S.appts.filter(x=>x.id!=D.id);save();render()}
+  else if(a=="editappt"){
+    ea = (String(ea) === String(D.id)) ? null : D.id;
+    render();
+  }
+  else if(a=="cancelappt"){
+    ea = null;
+    render();
+  }
+  else if(a=="saveappt"){
+    const appt = S.appts.find(x=>String(x.id)===String(D.id));
+    const tEl = document.getElementById("eat_" + D.id);
+    const pEl = document.getElementById("eap_" + D.id);
+    const dEl = document.getElementById("ead_" + D.id);
+    const tmEl = document.getElementById("eatm_" + D.id);
+    const yEl = document.getElementById("eay_" + D.id);
+    const addrEl = document.getElementById("eaaddr_" + D.id);
+    const newTitle = tEl ? tEl.value.trim() : "";
+    if(!newTitle){ toast("Client / purpose cannot be empty"); return; }
+    if(appt){
+      appt.title = newTitle;
+      appt.phone = pEl ? pEl.value.trim() : "";
+      appt.date = dEl ? dEl.value : appt.date;
+      appt.time = tmEl ? tmEl.value : "";
+      appt.type = yEl ? yEl.value : appt.type;
+      appt.addr = addrEl ? addrEl.value.trim() : "";
+      ea = null;
+      save();
+      toast("Appointment updated");
+      render();
+    }
+  }
+  else if(a=="dela"){
+    S.appts=S.appts.filter(x=>String(x.id)!==String(D.id));
+    if(String(ea)===String(D.id)) ea=null;
+    save();render();
+  }
   else if(a=="tm")addTimer("",+v);
   else if(a=="addt")addTimer($("#tl").value.trim(),+$("#tmn").value);
   else if(a=="delt"){S.timers=S.timers.filter(x=>x.id!=D.id);save();render()}
@@ -642,7 +742,8 @@ setInterval(()=>{
   S.timers.forEach(t=>{if(!t.fired&&t.end<=Date.now()){t.fired=true;ch=true;ring(t)}});
   if(ch){
     save();
-    if (document.activeElement && document.activeElement.tagName !== "INPUT") {
+    const activeTag = document.activeElement ? document.activeElement.tagName : "";
+    if (activeTag !== "INPUT" && activeTag !== "SELECT" && activeTag !== "TEXTAREA") {
       render();
     }
   }
